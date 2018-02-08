@@ -23,163 +23,99 @@ static HCRYPTKEY hAgreeKey = 0;        // Дескриптор ключа сог
 
 static FILE *certf=NULL;		// Файл, в котором хранится сертификат
 static FILE *publicf=NULL;		// Файл, в котором хранится открытый ключ
-static FILE *session_EncryptedKey=NULL;// Файл для хранения сессионного ключа (зашифрованный ключ)
-static FILE *session_MacKey=NULL;	// Файл для хранения сессионного ключа (имита)
-static FILE *vectorf=NULL;		// Файл для хранения вектора инициализации
 static FILE *EncryptionParam;           // Файл для хранения неменяемой части блоба
 
 static BYTE *pbKeyBlobSimple = NULL;   // Указатель на сессионный ключевой BLOB 
 static BYTE *pbIV = NULL;		// Вектор инициализации сессионного ключа
 
-void HandleEncryptError(char *s);
 
-void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, char *szCertFile, char *szKeyFile)
-{
-    //if(fopen_s(&certf, szCertFile, "r+b" ))
-    if((certf = fopen(szCertFile, "rb"))) {
-    	DWORD cbCert = 2000;
-    	BYTE  pbCert[2000];
-    	PCCERT_CONTEXT pCertContext = NULL;
-    	HCRYPTKEY hPubKey;
-    	printf( "The file '%s' was opened\n", szCertFile );
-
-    	cbCert = (DWORD)fread(pbCert, 1, cbCert, certf);
-    	if(!cbCert)
-    	    HandleEncryptError( "Failed to read certificate\n" );
-    	printf( "Certificate was read from the '%s'\n", szCertFile );
-
-    	pCertContext = CertCreateCertificateContext (
-    	    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, pbCert, cbCert);
-    	if (!pCertContext) {
-    	    HandleEncryptError( "CertCreateCertificateContext" );
-    	}
-
-    	// Импортируем открытый ключ
-    	if (CryptImportPublicKeyInfoEx(
-    	    hProv, 
-    	    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-    	    &(pCertContext->pCertInfo->SubjectPublicKeyInfo),
-    	    0,
-    	    0,
-    	    NULL,
-    	    &hPubKey))
-    	{
-    	    printf("Public key imported from cert file\n");
-    	} else {
-    	    CertFreeCertificateContext(pCertContext);
-    	    HandleEncryptError( "CryptImportPublicKeyInfoEx" );
-    	}
-    	CertFreeCertificateContext(pCertContext);
-    	
-    	// Экспортируем его в BLOB
-    	if (CryptExportKey(
-    	    hPubKey,
-    	    0,
-    	    PUBLICKEYBLOB,
-    	    0,
-    	    pbBlob,
-    	    pcbBlob))
-    	{
-    	    printf("Public key exported to blob\n");
-    	}
-    	else
-    	{
-    	    HandleEncryptError( "CryptExportKey" );
-    	}
-    } else {
-	// Открытие файла, в котором содержится открытый ключ получателя.
-	//if(!fopen_s(&publicf, szKeyFile, "r+b" ))
-	if(!(publicf = fopen(szKeyFile, "rb")))
-	    HandleEncryptError( "Problem opening the public key blob file\n" );
-	printf( "The file '%s' was opened\n", szKeyFile );
-
-	*pcbBlob = (DWORD)fread(pbBlob, 1, *pcbBlob, publicf);
-	if(!*pcbBlob)
-	    HandleEncryptError( "Failed to read key blob file\n" );
-	printf( "Key blob was read from the '%s'\n", szKeyFile );
-    }
-}
-
-void DecryptionCleanUp(void)
-{
-    if(session_EncryptedKey)
-	   fclose (session_EncryptedKey);
-    if(session_MacKey)
-    	fclose (session_MacKey);
-    if(vectorf)    
-        fclose (vectorf);
-    if(certf)
-    	fclose (certf); 
-    if(publicf)
-	   fclose (publicf);
-    if (EncryptionParam)
-    	fclose (EncryptionParam);
-
-    if(hKey)
-    	CryptDestroyKey(hKey);
-
-    if(hSessionKey)
-    	CryptDestroyKey(hSessionKey);
-
-    if(hAgreeKey)
-    	CryptDestroyKey(hAgreeKey);
-
-    if(hProv) 
-    	CryptReleaseContext(hProv, 0);
-}
-
-void CleanUp(void)
-{
-    if(session_EncryptedKey)
-    	fclose (session_EncryptedKey);
-    if(session_MacKey)
-    	fclose (session_MacKey);
-    if(vectorf)
-        fclose (vectorf);
+void CleanUp(void) {
     if(certf)
 	   fclose (certf);
+
     if(publicf)
         fclose (publicf);
+
     if (EncryptionParam)
     	fclose(EncryptionParam);
 
-    // Óíè÷òîæåíèå äåñêðèïòîðà çàêðûòîãî êëþ÷à.
     if(hKey)
 	   CryptDestroyKey(hKey);
 
-    // Óíè÷òîæåíèå äåñêðèïòîðà ñåññèîííîãî êëþ÷à.
     if(hSessionKey)
 	   CryptDestroyKey(hSessionKey);
 
-    // Óíè÷òîæåíèå äåñêðèïòîðà êëþ÷à ñîãëàñîâàíèÿ.
     if(hAgreeKey)
 	   CryptDestroyKey(hAgreeKey);
 
-    // Îñâîáîæäåíèå äåñêðèïòîðà ïðîâàéäåðà.
     if(hProv) 
     	CryptReleaseContext(hProv, 0);
 
     if(pbKeyBlobSimple)
 	   free(pbKeyBlobSimple);
+
     if(pbIV)
 	   free(pbIV);
 }
 
-void HandleEncryptError(char *s) {
+void HandleError(const char *s) {
     DWORD err = GetLastError();
     printf("Error number     : 0x%x\n", err);
     printf("Error description: %s\n", s);
     CleanUp();
-    if(!err) err = 1;
+    if(!err) 
+        err = 1;
     exit(err);
 }
 
-void HandleError(const char *s) {
-	DWORD err = GetLastError();
-    printf("Error number     : 0x%x\n", err);
-    printf("Error description: %s\n", s);
-    if(!err) err = 1;
-    exit(err);
+void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, char *szCertFile, char *szKeyFile)
+{
+    //if(fopen_s(&certf, szCertFile, "r+b" ))
+    if((certf = fopen(szCertFile, "rb"))) {
+        DWORD cbCert = 2000;
+        BYTE  pbCert[2000];
+        PCCERT_CONTEXT pCertContext = NULL;
+        HCRYPTKEY hPubKey;
+        printf( "The file '%s' was opened\n", szCertFile );
+
+        cbCert = (DWORD)fread(pbCert, 1, cbCert, certf);
+        if(!cbCert)
+            HandleError( "Failed to read certificate\n" );
+        printf( "Certificate was read from the '%s'\n", szCertFile );
+
+        pCertContext = CertCreateCertificateContext (
+            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, pbCert, cbCert);
+        if (!pCertContext) {
+            HandleError( "CertCreateCertificateContext" );
+        }
+
+        // Импортируем открытый ключ
+        if (CryptImportPublicKeyInfoEx(hProv, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, &(pCertContext->pCertInfo->SubjectPublicKeyInfo), 0, 0, NULL, &hPubKey)) {
+            printf("Public key imported from cert file\n");
+        } else {
+            CertFreeCertificateContext(pCertContext);
+            HandleError( "CryptImportPublicKeyInfoEx" );
+        }
+        CertFreeCertificateContext(pCertContext);
+        
+        // Экспортируем его в BLOB
+        if (CryptExportKey(hPubKey, 0, PUBLICKEYBLOB, 0, pbBlob, pcbBlob)) {
+            printf("Public key exported to blob\n");
+        } else {
+            HandleError( "CryptExportKey" );
+        }
+    } else {
+    // Открытие файла, в котором содержится открытый ключ получателя.
+    //if(!fopen_s(&publicf, szKeyFile, "r+b" ))
+    if(!(publicf = fopen(szKeyFile, "rb")))
+        HandleError( "Problem opening the public key blob file\n" );
+    printf( "The file '%s' was opened\n", szKeyFile );
+
+    *pcbBlob = (DWORD)fread(pbBlob, 1, *pcbBlob, publicf);
+    if(!*pcbBlob)
+        HandleError( "Failed to read key blob file\n" );
+    printf( "Key blob was read from the '%s'\n", szKeyFile );
+    }
 }
 
 BYTE* Encrypt(
@@ -216,6 +152,7 @@ BYTE* Encrypt(
     }
 
     LoadPublicKey(pbKeyBlob, &dwBlobLen, responderCertFilename, "Responder.pub");
+
 
     // Получение дескриптора закрытого ключа отправителя.
     if(CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey)) {
@@ -257,6 +194,8 @@ BYTE* Encrypt(
     } else {
 	   HandleError("Error computing BLOB length.");
     }
+
+    printf("dwBlobLenSimple: %d\n", dwBlobLenSimple);
 
     pbKeyBlobSimple = (BYTE*)malloc(dwBlobLenSimple);
 
@@ -336,9 +275,9 @@ BYTE* Decrypt(
 ) {
     BYTE  pbKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
     DWORD dwBlobLen = MAX_PUBLICKEYBLOB_SIZE;
-    BYTE *pbKeyBlobSimple = NULL;
+//    BYTE *pbKeyBlobSimple = NULL;
     DWORD cbBlobLenSimple;
-    BYTE pbIV[100];
+//    BYTE pbIV[100];
     DWORD dwIV = 0;
 
     DWORD cbContent = 0;
@@ -356,6 +295,7 @@ BYTE* Decrypt(
     tSimpleBlobHeaderStandart.Magic = G28147_MAGIC;    
 
     dwIV = IVLength;
+    pbIV = (BYTE*)malloc(dwIV);
     memcpy(pbIV, IV, dwIV);
 
    // Получение дескриптора контейнера получателя с именем "responderContainerName", 
@@ -381,6 +321,8 @@ BYTE* Decrypt(
     if(!pbKeyBlobSimple)
 	   HandleError("Out of memory. \n");
 
+printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
+
     memcpy(&((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->tSimpleBlobHeader, &tSimpleBlobHeaderStandart, sizeof(CRYPT_SIMPLEBLOB_HEADER));
     memcpy( ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bSV, sessionSV, SEANCE_VECTOR_LEN );
     memcpy( ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptedKey, sessionEncryptedKey, G28147_KEYLEN );
@@ -392,7 +334,6 @@ BYTE* Decrypt(
 
     LoadPublicKey(pbKeyBlob, &dwBlobLen, senderCertFilename, "Sender.pub");
 
-    // Ïîëó÷åíèå äåñêðèïòîðà çàêðûòîãî êëþ÷à ïîëó÷àòåëÿ.
     if(CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey)) {
 		printf("The private key has been acquired. \n");
     } else {
@@ -436,11 +377,10 @@ BYTE* Decrypt(
     
     memcpy(encryptedText, pbContent, cbContent);
 
-    DecryptionCleanUp();
+    CleanUp();
+    free(pbEncryptionParamSetStandart);
 
     printf("The program ran to completion without error. \n");
-    free(pbEncryptionParamSetStandart);
-    free(pbKeyBlobSimple);
 }
 
 const char* CreateHash(const char* textToHash, int textToHashLength) {
