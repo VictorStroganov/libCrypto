@@ -16,8 +16,8 @@ var ByteArray = ArrayType(byte);
 
 const cryptoLib = ffi.Library('./libCrypto.so', {
 	'CreateHash': ['void', [ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('int')]],
-	'Encrypt': [ByteArray, [ref.refType('int'), ref.refType('byte'), 'string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('byte'), ref.refType('byte'), ref.refType('int'), ref.refType('byte'), ref.refType('byte'), ref.refType('int')]],
-	'Decrypt': ['string', ['string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('byte'), ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('byte'), 'int', ref.refType('byte'), 'int']],
+	'Encrypt': ['void', [ref.refType('byte'), ref.refType('int'), 'string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('int')]],
+	'Decrypt': ['void', ['string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), 'int', ref.refType('byte'), 'int']],
 	'SignHash': ['void', ['string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('int'), ref.refType('byte'), ref.refType('int')]],
 	'VerifySignature': ['bool', [ref.refType('byte'), 'int', ref.refType('byte'), 'int', ref.refType('byte'), 'int', 'string']]
 });
@@ -33,55 +33,35 @@ module.exports = {
 		return hash.subarray(0, hashLength.deref());
 	},
     encrypt: (bytesArrayToEncrypt, senderContainerName, responderCertFilename) => {
-		let sessionEncryptedKey = new Uint8Array( G28147_KEYLEN );
-		let sessionSV = new Uint8Array( SEANCE_VECTOR_LEN );
 		let IV = new Uint8Array(100);
 		let IVLength = ref.alloc('int');
-		let sessionMacKey = new Uint8Array( EXPORT_IMIT_SIZE );
-		let encryptionParam = new Uint8Array(200);
-		let encryptionParamLength = ref.alloc('int');
 
 		let sessionKeyBlobLength = ref.alloc('int');
 		let sessionKeyBlob = new Uint8Array(200);
 
 		const encrypted = cryptoLib.Encrypt(
-			sessionKeyBlobLength, 
 			sessionKeyBlob, 
+			sessionKeyBlobLength, 
 			senderContainerName, 
 			responderCertFilename, 
 			bytesArrayToEncrypt, bytesArrayToEncrypt.length, 
-			sessionEncryptedKey, 
-			sessionSV, 
-			IV, IVLength, 
-			sessionMacKey, 
-			encryptionParam, encryptionParamLength
+			IV, IVLength
 		);
 
 		return {
 			encryptedBytesArray: bytesArrayToEncrypt,
-			sessionKey: {
-				sessionEncryptedKey: sessionEncryptedKey,
-				sessionSV: sessionSV,
-				sessionMacKey: sessionMacKey,
-				encryptionParam: encryptionParam.subarray(0, encryptionParamLength.deref()),
-				sessionKeyBlob: sessionKeyBlob.subarray(0, sessionKeyBlobLength.deref())
-			},
+			sessionKeyBlob: sessionKeyBlob.subarray(0, sessionKeyBlobLength.deref()),
 			IV: IV.subarray(0, IVLength.deref())
 		};
     },
-    decrypt: (encryptedBytes, responderContainerName, senderCertFilename, sessionKey, IV, keyBlob) => {
-		const decrypted = cryptoLib.Decrypt(
+    decrypt: (encryptedBytes, responderContainerName, senderCertFilename, IV, keyBlob) => {
+		cryptoLib.Decrypt(
 			responderContainerName,
 			senderCertFilename,
 			encryptedBytes, 
 			encryptedBytes.length,
-			sessionKey.sessionEncryptedKey,
-			sessionKey.sessionSV,
 			IV, 
 			IV.length,
-			sessionKey.sessionMacKey, 
-			sessionKey.encryptionParam, 
-			sessionKey.encryptionParam.length,
 			keyBlob,
 			keyBlob.length
 		);

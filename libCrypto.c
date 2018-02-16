@@ -1,20 +1,13 @@
 #include <stdio.h>
 #include <string.h>
-//#include <errno.h>
-//#include <locale.h>
  
 #ifdef _WIN32
 #   include <windows.h>
 #   include <wincrypt.h>
-//#   include <tchar.h>
-//#   pragma comment(lib, "shell32.lib")
 #else
 #   include <stdlib.h>
 #   include <CSP_WinDef.h>
 #   include <CSP_WinCrypt.h>
-//#   include <stdarg.h>
-//#   include <unistd.h>
-//#   include <fcntl.h>
 #endif
 #include <WinCryptEx.h>
 
@@ -36,12 +29,13 @@ static BYTE *pbKeyBlob = NULL;
 
 static FILE *certf=NULL;		// Файл, в котором хранится сертификат
 static FILE *publicf=NULL;		// Файл, в котором хранится открытый ключ
-static FILE *EncryptionParam;           // Файл для хранения неменяемой части блоба
 
 static BYTE *pbKeyBlobSimple = NULL;   // Указатель на сессионный ключевой BLOB 
 static BYTE *pbIV = NULL;		// Вектор инициализации сессионного ключа
 
 void HandleError(const char *s);
+void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, char *szKeyFile);
+void CleanUp(void);
 
 char* GetHashOidByKeyOid(IN char *szKeyOid) {
     if (strcmp(szKeyOid, szOID_CP_GOST_R3410EL) == 0) {
@@ -461,9 +455,6 @@ void CleanUp(void) {
     if(publicf)
         fclose (publicf);
 
-    if (EncryptionParam)
-    	fclose(EncryptionParam);
-
     if(hKey)
 	   CryptDestroyKey(hKey);
 
@@ -493,8 +484,7 @@ void HandleError(const char *s) {
     exit(err);
 }
 
-void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, char *szKeyFile)
-{
+void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, char *szKeyFile) {
     //if(fopen_s(&certf, szCertFile, "r+b" ))
     if((certf = fopen(szCertFile, "rb"))) {
         DWORD cbCert = 2000;
@@ -544,22 +534,15 @@ void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, char *s
 }
 
 BYTE* Encrypt(
-    DWORD* sessionKeyBlobLength, BYTE* sessionKeyBlob, 
+    BYTE* sessionKeyBlob, DWORD* sessionKeyBlobLength,
     const char* senderContainerName, 
     const char* responderCertFilename, 
-    BYTE* textToEncrypt, 
-    int textToEncryptLength, 
-    BYTE* sessionEncryptedKey, 
-    BYTE* sessionSV, 
-    BYTE* IV, 
-    DWORD* IVLength, 
-    BYTE* sessionMacKey, 
-    BYTE* encryptionParam, 
-    DWORD* encryptionParamLength
-    ) {
+    BYTE* textToEncrypt, int textToEncryptLength, 
+    BYTE* IV, DWORD* IVLength
+) {
     
-    BYTE  pbKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
-    DWORD dwBlobLen = MAX_PUBLICKEYBLOB_SIZE;
+    BYTE  responderPublicKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
+    DWORD responderPublicKeyBlobLength = MAX_PUBLICKEYBLOB_SIZE;
     DWORD dwBlobLenSimple;
 
     DWORD cbContent = 0;
@@ -576,7 +559,7 @@ BYTE* Encrypt(
 	   HandleError("Error during CryptAcquireContext.");
     }
 
-    LoadPublicKey(pbKeyBlob, &dwBlobLen, responderCertFilename, "Responder.pub");
+    LoadPublicKey(responderPublicKeyBlob, &responderPublicKeyBlobLength, responderCertFilename, "Responder.pub");
 
 
     // Получение дескриптора закрытого ключа отправителя.
@@ -588,18 +571,18 @@ BYTE* Encrypt(
 
     // Получение ключа согласования импортом открытого ключа получателя
     // на закрытом ключе отправителя.
-    if(CryptImportKey(hProv, pbKeyBlob, dwBlobLen, hKey, 0, &hAgreeKey)) {
+    if(CryptImportKey(hProv, responderPublicKeyBlob, responderPublicKeyBlobLength, hKey, 0, &hAgreeKey)) {
 	   printf("The responder public key has been imported. \n");
     } else {
 	   HandleError("Error during CryptImportKey public key.");
     }
 
     // Установление PRO12_EXPORT алгоритма ключа согласования
-    if(CryptSetKeyParam(hAgreeKey, KP_ALGID, (LPBYTE)&ke_alg, 0)) {
+ /*   if(CryptSetKeyParam(hAgreeKey, KP_ALGID, (LPBYTE)&ke_alg, 0)) {
 	   printf("PRO12_EXPORT agree key algorithm has been set. \n");
     } else {
 	   HandleError("Error during CryptSetKeyParam agree key.");
-    }
+    }*/
 
     // Генерация сессионного ключа.
     if(CryptGenKey(hProv, CALG_G28147, CRYPT_EXPORTABLE, &hSessionKey)) {
@@ -627,7 +610,7 @@ BYTE* Encrypt(
     if(!pbKeyBlobSimple) 
 	   HandleError("Out of memory. \n");
 
-    // Зашифрование сессионного ключа на ключе Agree.
+    // Зашифрование сессионного ключа на ключе Agree, экспорт в pbKeyBlobSimple.
     if(CryptExportKey(hSessionKey, hAgreeKey, SIMPLEBLOB, 0, pbKeyBlobSimple, &dwBlobLenSimple)) {
     	printf("Contents have been written to the BLOB. \n");
     } else {
@@ -654,17 +637,9 @@ BYTE* Encrypt(
 
     memcpy(IV, pbIV, dwIV);
     memcpy(IVLength, &dwIV, sizeof(dwIV));
-    memcpy(sessionSV, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bSV, SEANCE_VECTOR_LEN);
-    memcpy(sessionEncryptedKey, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptedKey, G28147_KEYLEN);
-    memcpy(sessionMacKey, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bMacKey, EXPORT_IMIT_SIZE);
 
     if (((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[0] != 0x30)
     	HandleError("The EncryptionParam can not be written to the 'EncryptionParam.bin' - first byte is not 0x30\n");
-    //CryptDecodeObject(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, X509_NAME, );
-    cbEncryptionParamSetStandart = (DWORD)((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[1] + sizeof((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[0] + sizeof((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[1];
-
-    memcpy(encryptionParam, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet, cbEncryptionParamSetStandart);
-    memcpy(encryptionParamLength, &cbEncryptionParamSetStandart, sizeof(cbEncryptionParamSetStandart));
 
     memcpy(sessionKeyBlob, pbKeyBlobSimple, dwBlobLenSimple); //sizeof(pbKeyBlobSimple)
     memcpy(sessionKeyBlobLength, &dwBlobLenSimple, sizeof(dwBlobLenSimple));
@@ -688,41 +663,20 @@ BYTE* Encrypt(
 	return textToEncrypt;
 }
 
-BYTE* Decrypt(
+void Decrypt(
     const char* responderContainerName, 
     const char* senderCertFilename, 
     BYTE* encryptedText, int encryptedTextLength, 
-    BYTE* sessionEncryptedKey, 
-    BYTE* sessionSV, 
     BYTE* IV, int IVLength, 
-    BYTE* sessionMacKey, 
-    BYTE* encryptionParam, int encryptionParamLength,
     BYTE* keyBlob, int keyBlobLength
 ) {
-    BYTE  pbKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
-    DWORD dwBlobLen = MAX_PUBLICKEYBLOB_SIZE;
-//    BYTE *pbKeyBlobSimple = NULL;
+    BYTE  senderPublicKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
+    DWORD senderPublicKeyBlobLength = MAX_PUBLICKEYBLOB_SIZE;
+
     DWORD cbBlobLenSimple;
-//    BYTE pbIV[100];
-    DWORD dwIV = 0;
 
     DWORD cbContent = 0;
-    ALG_ID ke_alg = CALG_PRO12_EXPORT; //CALG_G28147; 
-    CRYPT_SIMPLEBLOB_HEADER tSimpleBlobHeaderStandart;
-    DWORD dwBytesRead;
-    BYTE *pbEncryptionParamSetStandart;
-    DWORD cbEncryptionParamSetStandart;
-
-    tSimpleBlobHeaderStandart.BlobHeader.aiKeyAlg = CALG_G28147; 
-    tSimpleBlobHeaderStandart.BlobHeader.bType = SIMPLEBLOB;
-    tSimpleBlobHeaderStandart.BlobHeader.bVersion = BLOB_VERSION;
-    tSimpleBlobHeaderStandart.BlobHeader.reserved = 0;
-    tSimpleBlobHeaderStandart.EncryptKeyAlgId = CALG_G28147;
-    tSimpleBlobHeaderStandart.Magic = G28147_MAGIC;    
-
-    dwIV = IVLength;
-    pbIV = (BYTE*)malloc(dwIV);
-    memcpy(pbIV, IV, dwIV);
+    ALG_ID ke_alg = CALG_G28147; //CALG_SIMPLE_EXPORT; //CALG_PRO12_EXPORT; //CALG_PRO_EXPORT; //CALG_G28147; 
 
    // Получение дескриптора контейнера получателя с именем "responderContainerName", 
     // находящегося в рамках провайдера. 
@@ -731,38 +685,7 @@ BYTE* Decrypt(
     }
     printf("The key container \"%s\" has been acquired. \n", responderContainerName);
 
-    cbEncryptionParamSetStandart = encryptionParamLength;
-    
-    // allocate memory to contain the whole file:
-    pbEncryptionParamSetStandart = (BYTE*)malloc(cbEncryptionParamSetStandart);
-    if (pbEncryptionParamSetStandart == NULL)
-	   HandleError("Out of memory. \n");
-    
-    memcpy(pbEncryptionParamSetStandart, encryptionParam, cbEncryptionParamSetStandart);
-
-    pbKeyBlobSimple = keyBlob;
-    cbBlobLenSimple = keyBlobLength;
-
-/*    cbBlobLenSimple = cbEncryptionParamSetStandart;
-    cbBlobLenSimple += (sizeof(CRYPT_SIMPLEBLOB_HEADER) + SEANCE_VECTOR_LEN + G28147_KEYLEN + EXPORT_IMIT_SIZE);// +sizeof(pbEncryptionParamSetStandart);
-
-    pbKeyBlobSimple = malloc(cbBlobLenSimple);
-
-    if(!pbKeyBlobSimple)
-	   HandleError("Out of memory. \n");
-
-printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
-
-    memcpy(&((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->tSimpleBlobHeader, &tSimpleBlobHeaderStandart, sizeof(CRYPT_SIMPLEBLOB_HEADER));
-    memcpy( ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bSV, sessionSV, SEANCE_VECTOR_LEN );
-    memcpy( ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptedKey, sessionEncryptedKey, G28147_KEYLEN );
-
-    memcpy(((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet, pbEncryptionParamSetStandart, cbEncryptionParamSetStandart);
-
-    memcpy(((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bMacKey, sessionMacKey, EXPORT_IMIT_SIZE);
-*/
-
-    LoadPublicKey(pbKeyBlob, &dwBlobLen, senderCertFilename, "Sender.pub");
+    LoadPublicKey(senderPublicKeyBlob, &senderPublicKeyBlobLength, senderCertFilename, "Sender.pub");
 
     if(CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey)) {
 		printf("The private key has been acquired. \n");
@@ -770,7 +693,7 @@ printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
 		HandleError("Error during CryptGetUserKey private key.");
     }
 
-    if(CryptImportKey(hProv, pbKeyBlob, dwBlobLen, hKey, 0, &hAgreeKey)) {
+    if(CryptImportKey(hProv, senderPublicKeyBlob, senderPublicKeyBlobLength, hKey, 0, &hAgreeKey)) {
 		printf("The sender public key has been imported. \n");
     } else {
 		HandleError("Error during CryptImportKey public key.");
@@ -782,34 +705,28 @@ printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
 		HandleError("Error during CryptSetKeyParam agree key.");
     }
 
-    if(CryptImportKey(hProv, pbKeyBlobSimple, cbBlobLenSimple, hAgreeKey, 0, &hSessionKey)) {
+    if(CryptImportKey(hProv, keyBlob, (DWORD)keyBlobLength, hAgreeKey, 0, &hSessionKey)) {
 		printf("The session key has been imported. \n");
     } else {
 		HandleError("Error during CryptImportKey session key.");
     }
 
-    if(!CryptSetKeyParam(hSessionKey, KP_IV, pbIV, 0)) {
+    if(!CryptSetKeyParam(hSessionKey, KP_IV, IV, 0)) {
 		HandleError("Error during CryptSetKeyParam.");
     }
     printf( "CryptSetKeyParam succeeded. \n");
 
-
-    cbContent = (DWORD)encryptedTextLength; //sizeof(encryptedText);
-	BYTE* pbContent = (BYTE*)encryptedText;
-
     BOOL bFinal = TRUE; //feof(Encrypt);
 
-    if(CryptDecrypt(hSessionKey, 0, bFinal, 0, pbContent, &cbContent)) {
+    if(CryptDecrypt(hSessionKey, 0, bFinal, 0, encryptedText, (DWORD*)&encryptedTextLength)) {
 		printf( "Decryption succeeded. \n");
     } else {
 		HandleError("Decryption failed.");
     }
     
-    memcpy(encryptedText, pbContent, cbContent);
     printf("The program ran to completion without error. \n");
 
-    CleanUp();
-    free(pbEncryptionParamSetStandart);
+   // CleanUp();
 }
 
 void CreateHash(BYTE* bytesArrayToHash, DWORD bytesArrayToHashLength, BYTE* hash, DWORD* hashLength) {
