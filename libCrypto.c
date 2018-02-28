@@ -340,7 +340,7 @@ void Encrypt(
     if(!pbKeyBlobSimple) 
 	   HandleError("Out of memory. \n");
 
-    // Зашифрование сессионного ключа на ключе Agree.
+    // Зашифрование сессионного ключа на ключе Agree, экспорт в pbKeyBlobSimple.
     if(CryptExportKey(hSessionKey, hAgreeKey, SIMPLEBLOB, 0, pbKeyBlobSimple, &dwBlobLenSimple)) {
     	printf("Contents have been written to the BLOB. \n");
     } else {
@@ -501,7 +501,6 @@ printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
     }
     printf( "CryptSetKeyParam succeeded. \n");
 
-
     cbContent = (DWORD)encryptedTextLength;
 	BYTE* pbContent = (BYTE*)malloc(encryptedTextLength); 
     memcpy(pbContent, encryptedText, encryptedTextLength);
@@ -650,3 +649,4 @@ void HandleError(const char *s) {
         err = 1;
     exit(err);
 }
+
