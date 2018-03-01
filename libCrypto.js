@@ -17,7 +17,7 @@ var ByteArray = ArrayType(byte);
 const cryptoLib = ffi.Library('./libCrypto.so', {
 	'CreateHash': ['void', [ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('int')]],
 	'Encrypt': ['void', [ref.refType('int'), ref.refType('byte'), 'string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('byte'), ref.refType('byte'), ref.refType('int'), ref.refType('byte'), ref.refType('byte'), ref.refType('int')]],
-	'Decrypt': ['void', ['string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('byte'), ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('byte'), 'int', ref.refType('byte'), 'int']],
+	'Decrypt': ['void', ['string', 'string', ref.refType('byte'), 'int', ref.refType('byte'), 'int', ref.refType('byte'), 'int']],
 	'SignHash': ['void', ['string', ref.refType('byte'), 'int', ref.refType('byte'), ref.refType('int')]],
 	'VerifySignature': ['bool', [ref.refType('byte'), 'int', ref.refType('byte'), 'int', 'string']]
 });
@@ -69,19 +69,14 @@ module.exports = {
 			IV: IV.subarray(0, IVLength.deref())
 		};
     },
-    decrypt: (encryptedBytes, responderContainerName, senderCertFilename, sessionKey, IV, keyBlob) => {
+    decrypt: (encryptedBytes, responderContainerName, senderCertFilename, IV, keyBlob) => {
 		cryptoLib.Decrypt(
 			responderContainerName,
 			senderCertFilename,
 			encryptedBytes, 
 			encryptedBytes.length,
-			sessionKey.sessionEncryptedKey,
-			sessionKey.sessionSV,
 			IV, 
 			IV.length,
-			sessionKey.sessionMacKey, 
-			sessionKey.encryptionParam, 
-			sessionKey.encryptionParam.length,
 			keyBlob,
 			keyBlob.length
 		);

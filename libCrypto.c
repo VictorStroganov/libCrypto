@@ -11,7 +11,6 @@
 #endif
 #include <WinCryptEx.h>
 
-#define BUFSIZE 1024
 #define GR3411LEN  32//64
 
 #define MAX_PUBLICKEYBLOB_SIZE 200
@@ -267,14 +266,14 @@ void Encrypt(
     BYTE* sessionMacKey, 
     BYTE* encryptionParam, 
     DWORD* encryptionParamLength
-    ) {
+) {
     BYTE  pbResponderKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
     DWORD dwResponderKeyBlobLen = MAX_PUBLICKEYBLOB_SIZE;
     DWORD dwBlobLenSimple;
 
     DWORD dwIV = 0;
     DWORD bufLen = 0;
-    ALG_ID ke_alg = CALG_PRO12_EXPORT;
+    ALG_ID ke_alg = CALG_PRO_EXPORT;
     DWORD cbEncryptionParamSetStandart;
 
     // Получение дескриптора контейнера получателя с именем senderContainerName, 
@@ -308,13 +307,6 @@ void Encrypt(
     } else {
 	   HandleError("Error during CryptSetKeyParam agree key.");
     }
-
-/*    if(CryptSetKeyParam(hAgreeKey, KP_IV, UKM, 0)) {
-       printf("UKM has been set. \n");
-    } else {
-       HandleError("Error during CryptSetKeyParam UKM agree key.");
-    }*/
-
 
     // Генерация сессионного ключа.
     if(CryptGenKey(hProv, CALG_G28147, CRYPT_EXPORTABLE, &hSessionKey)) {
@@ -398,11 +390,7 @@ void Decrypt(
     const char* responderContainerName, 
     const char* senderCertFilename, 
     BYTE* encryptedText, int encryptedTextLength, 
-    BYTE* sessionEncryptedKey, 
-    BYTE* sessionSV, 
     BYTE* IV, int IVLength, 
-    BYTE* sessionMacKey, 
-    BYTE* encryptionParam, int encryptionParamLength,
     BYTE* keySimpleBlob, int keySimpleBlobLength
 ) {
     BYTE  pbKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
@@ -410,7 +398,7 @@ void Decrypt(
 
     DWORD cbContent = 0;
     
-    ALG_ID ke_alg = CALG_PRO12_EXPORT;
+    ALG_ID ke_alg = CALG_PRO_EXPORT;
 
    // Получение дескриптора контейнера получателя с именем "responderContainerName", 
     // находящегося в рамках провайдера. 
@@ -418,51 +406,6 @@ void Decrypt(
 	   HandleError("Error during CryptAcquireContext");
     }
     printf("The key container \"%s\" has been acquired. \n", responderContainerName);
-
-/*
-    BYTE *pbEncryptionParamSetStandart;
-    DWORD cbEncryptionParamSetStandart;
-
-    CRYPT_SIMPLEBLOB_HEADER tSimpleBlobHeaderStandart;
-
-    DWORD cbBlobLenSimple;
-
-    tSimpleBlobHeaderStandart.BlobHeader.aiKeyAlg = CALG_G28147;
-    tSimpleBlobHeaderStandart.BlobHeader.bType = SIMPLEBLOB;
-    tSimpleBlobHeaderStandart.BlobHeader.bVersion = BLOB_VERSION;
-    tSimpleBlobHeaderStandart.BlobHeader.reserved = 0;
-    tSimpleBlobHeaderStandart.EncryptKeyAlgId = CALG_G28147;
-    tSimpleBlobHeaderStandart.Magic = G28147_MAGIC;
-
-
-    cbEncryptionParamSetStandart = encryptionParamLength;
-    
-    // allocate memory to contain the whole file:
-    pbEncryptionParamSetStandart = (BYTE*)malloc(cbEncryptionParamSetStandart);
-    if (pbEncryptionParamSetStandart == NULL)
-	   HandleError("Out of memory. \n");
-    
-    memcpy(pbEncryptionParamSetStandart, encryptionParam, cbEncryptionParamSetStandart);
-
-
-    cbBlobLenSimple = cbEncryptionParamSetStandart;
-    cbBlobLenSimple += (sizeof(CRYPT_SIMPLEBLOB_HEADER) + SEANCE_VECTOR_LEN + G28147_KEYLEN + EXPORT_IMIT_SIZE);// +sizeof(pbEncryptionParamSetStandart);
-
-    pbKeyBlobSimple = malloc(cbBlobLenSimple);
-
-    if(!pbKeyBlobSimple)
-	   HandleError("Out of memory. \n");
-
-printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
-
-    memcpy(&((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->tSimpleBlobHeader, &tSimpleBlobHeaderStandart, sizeof(CRYPT_SIMPLEBLOB_HEADER));
-    memcpy( ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bSV, sessionSV, SEANCE_VECTOR_LEN );
-    memcpy( ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptedKey, sessionEncryptedKey, G28147_KEYLEN );
-
-    memcpy(((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet, pbEncryptionParamSetStandart, cbEncryptionParamSetStandart);
-
-    memcpy(((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bMacKey, sessionMacKey, EXPORT_IMIT_SIZE);
-*/
 
     LoadPublicKey(pbKeyBlob, &dwBlobLen, senderCertFilename, senderCertFilename);
 
@@ -483,12 +426,6 @@ printf("cbBlobLenSimple: %d\n", cbBlobLenSimple);
     } else {
 		HandleError("Error during CryptSetKeyParam agree key.");
     }
-
- /*   if(CryptSetKeyParam(hAgreeKey, KP_IV, UKM, 0)) {
-       printf("UKM has been set. \n");
-    } else {
-       HandleError("Error during CryptSetKeyParam UKM agree key.");
-    }   */ 
 
     if(CryptImportKey(hProv, keySimpleBlob, keySimpleBlobLength, hAgreeKey, 0, &hSessionKey)) {
 		printf("The session key has been imported. \n");
