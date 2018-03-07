@@ -1,12 +1,58 @@
 #ifndef libCrypto_h__
 #define libCrypto_h__
 
-extern const char* CreateHash(const char* textToHash, int textToHashLength)
+#define GR3411LEN  32//64
 
-extern BYTE* Encrypt(DWORD* sessionKeyBlobLength, BYTE* sessionKeyBlob, const char* senderContainerName, const char* responderCertFilename,  BYTE* textToEncrypt, int textToEncryptLength, BYTE* sessionEncryptedKey, BYTE* sessionSV, BYTE* IV, DWORD* IVLength, BYTE* sessionMacKey, BYTE* encryptionParam, DWORD* encryptionParamLength);
+#define MAX_PUBLICKEYBLOB_SIZE 200
 
-extern BYTE* Decrypt(const char* responderContainerName, const char* senderCertFilename, BYTE* encryptedText, int encryptedTextLength, BYTE* sessionEncryptedKey, BYTE* sessionSV, BYTE* IV, int IVLength, BYTE* sessionMacKey, BYTE* encryptionParam, int encryptionParamLength);
+typedef struct CallResult {
+    int status;
+    DWORD errorCode;
+    char *errorMessage;
+} CallResult;
 
-void HandleEncryptError(char *s);
+CallResult ResultSuccess() {
+    CallResult result = {0, 0, ""};
+    return result;
+}
+
+CallResult HandleError(const char *s);
+
+CallResult LoadPublicKey(HCRYPTPROV hProv, BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, const char *szKeyFile);
+
+CallResult SignHash(
+    const char* keyContainer, 
+    BYTE* messageBytesArray, 
+    DWORD messageBytesArrayLength, 
+    BYTE* signatureBytesArray, 
+    DWORD* signatureBytesArrayLength
+);
+
+CallResult VerifySignature(
+    BYTE* messageBytesArray, DWORD messageBytesArrayLength, 
+    BYTE* signatureByteArray, DWORD signatureBytesArrayLength,
+    const char* certFilename,
+    BOOL *verificationResultToReturn
+);
+
+CallResult Encrypt(
+    DWORD* sessionKeyBlobLength, BYTE* sessionKeyBlob, 
+    const char* senderContainerName, 
+    const char* responderCertFilename, 
+    BYTE* textToEncrypt, 
+    int textToEncryptLength, 
+    BYTE* IV, 
+    DWORD* IVLength
+);
+
+CallResult Decrypt(
+    const char* responderContainerName, 
+    const char* senderCertFilename, 
+    BYTE* encryptedText, int encryptedTextLength, 
+    BYTE* IV, int IVLength, 
+    BYTE* keySimpleBlob, int keySimpleBlobLength
+);
+
+CallResult CreateHash(BYTE* bytesArrayToHash, DWORD bytesArrayToHashLength, BYTE* hash, DWORD* hashLength);
 
 #endif  // libCrypto_h__

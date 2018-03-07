@@ -5,11 +5,11 @@ const libCrypto = require('./libCrypto');
 const textToEncode = "text message to encode";
 
 
-const senderContainerName = "5973e5bc6-1e43-6206-c603-21fdd08867e"; // "cert_tokarev_flash"; // "cplib"; //"sender-main"; 
-const responderCertFilename =  "2012_Cert.cer"; // "tokarev_cer.cer"; //"cplib.cer"; //"responder-main.cer"; //
+const senderContainerName = "5973e5bc6-1e43-6206-c603-21fdd08867e";
+const responderCertFilename =  "2012_Cert.cer";
 
-const responderContainerName = "5973e5bc6-1e43-6206-c603-21fdd08867e"; //"cert_tokarev_flash"; // "cplib"; //"responder-main"; 
-const senderCertFilename = "2012_Cert.cer"; //"tokarev_cer.cer"; //"cplib.cer"; //"sender-main.cer"; // 
+const responderContainerName = "5973e5bc6-1e43-6206-c603-21fdd08867e";
+const senderCertFilename = "2012_Cert.cer";
 
 
 const buffer = Buffer.from(textToEncode);
@@ -22,48 +22,24 @@ let encryptionResult = libCrypto.encrypt(bytesToEncrypt, senderContainerName, re
 
 console.log("====encryptedBytesArray:" + encryptionResult.encryptedBytesArray);
 
-console.log("====KeyBlob:" + encryptionResult.sessionKey.sessionKeyBlob);
-console.log("====sessionEncryptedKey:" + encryptionResult.sessionKey.sessionEncryptedKey);
-console.log("====sessionSV:" + encryptionResult.sessionKey.sessionSV);
-console.log("====sessionMacKey:" + encryptionResult.sessionKey.sessionMacKey);
-console.log("====encryptionParam:" + encryptionResult.sessionKey.encryptionParam);
+console.log("====KeyBlob:" + encryptionResult.sessionKeyBlob);
 console.log("====IV:" + encryptionResult.IV);
 
+
+let encryptedBytesArray = new Uint8Array([46,44,243,89,248,138,192,196,23,58,255,75,75,92,8,14,121,132,206,97,219,124]);
+let sessionKeyBlob = new Uint8Array([1,32,0,0,30,102,0,0,253,81,74,55,30,102,0,0,246,85,60,206,244,32,49,43,157,220,127,136,22,171,8,132,151,212,123,237,61,137,118,167,205,155,133,200,174,205,7,221,81,235,78,128,22,150,148,73,163,145,76,233,48,11,6,9,42,133,3,7,1,2,5,1,1]);
+let IV = new Uint8Array([102,100,245,44,255,196,107,181]);
 
 let decryptedBytes = libCrypto.decrypt(
 	encryptionResult.encryptedBytesArray, 
 	responderContainerName,
 	senderCertFilename,
 	encryptionResult.IV,
-	encryptionResult.sessionKey.sessionKeyBlob);
+	encryptionResult.sessionKeyBlob);
 
 const decryptedMessage = (new Buffer(decryptedBytes)).toString();
 console.log("Decrypted message:" + decryptedMessage);
 
-//------------node.js
-/*
-let encryptedBytesArray = new Uint8Array([129,146,107,228,193,8,195,73,157,245,216,41,116,168,236,82,208,125,113,17,178,252]);
-
-let KeyBlob = new Uint8Array([
-	//header: 16: 
-	1,32,0,0,30,102,0,0,253,81,74,55,30,102,0,0,
-		//sessionSV: 8: 
-		84,51,142,134,228,89,28,40,
-			//sessionEncryptedKey: 32: 
-			2,175,153,201,22,209,165,101,167,151,219,94,218,168,31,102,204,64,97,41,46,110,139,29,159,116,30,113,215,37,89,165,
-				//sessionMacKey: 4: 
-				138,58,159,111,
-					//encryptionParam: 13: 
-					48,11,6,9,42,133,3,7,1,2,5,1,1]);
-
-let sessionSV = new Uint8Array([84,51,142,134,228,89,28,40]);
-
-let sessionEncryptedKey = new Uint8Array([2,175,153,201,22,209,165,101,167,151,219,94,218,168,31,102,204,64,97,41,46,110,139,29,159,116,30,113,215,37,89,165]);
-
-let sessionMacKey = new Uint8Array([138,58,159,111]);
-
-let encryptionParam = new Uint8Array([48,11,6,9,42,133,3,7,1,2,5,1,1]);
-*/
 //-------------------CryptoProKeyWrap
 /*
 let encryptedBytesArray = new Uint8Array([76,149,16,192,19,94,79,85,106,67,83,182,44,61,246,147,153,102,104,45,3,114]);
@@ -96,16 +72,20 @@ console.log("Decrypted message:" + decryptedMessage);
 */
 
 //Signature example:
-//const bytesArrayToSign = new Uint8Array(buffer);
-//console.log("Bytes to sign:" + bytesArrayToSign);
+/*const bytesArrayToSign = new Uint8Array(buffer);
+console.log("Bytes to sign:" + bytesArrayToSign);
 
 
-//const signature = libCrypto.signHash(senderContainerName, bytesArrayToSign);
-//console.log("Signature:" + signature);
+const signature = libCrypto.signHash(senderContainerName, bytesArrayToSign);
+console.log("Signature:" + signature);
 
-//const toVerify = new Uint8Array([199,4,32,149,176,37,73,113,113,176,34,45,100,149,210,122,153,11,6,240,245,90,241,167,178,123,223,32,129,23,14,192,204,223,163,100,159,237,34,253,69,82,41,243,90,201,86,35,201,61,118,76,245,21,38,198,86,60,251,142,238,144,190,223]);
-//const isVerified = libCrypto.verifySignature(bytesArrayToSign, signature, senderCertFilename);
-
+//const signature = new Uint8Array([24,61,148,203,118,4,210,69,139,98,79,169,22,58,15,162,12,172,117,164,132,5,229,153,197,192,39,158,202,2,3,23,141,144,173,28,229,103,48,203,155,160,70,231,234,219,14,184,193,173,247,136,238,202,175,48,181,75,182,117,79,180,191,14]);
+/*const isVerified = libCrypto.verifySignature(bytesArrayToSign, signature, senderCertFilename);
+if(isVerified) {
+	console.log("Verified");
+} else {
+	console.log("Verification error");
+}*/
 
 //CreateHash example:
  //const hash = libCrypto.createHash(bytesArrayToSign);

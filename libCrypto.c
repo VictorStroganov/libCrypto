@@ -11,388 +11,224 @@
 #endif
 #include <WinCryptEx.h>
 
-#define GR3411LEN  32//64
+#include "libCrypto.h"
 
-#define MAX_PUBLICKEYBLOB_SIZE 200
-
-static HCRYPTPROV hProv = 0;		// Дескриптор CSP 
-static HCRYPTKEY hKey = 0;		// Дескриптор закрытого ключа 
-static HCRYPTKEY hSessionKey = 0;	// Дескриптор сессионного ключа
-static HCRYPTKEY hAgreeKey = 0;        // Дескриптор ключа согласования
-
-static HCRYPTHASH hHash = 0;
-static HCRYPTKEY hPubKey = 0;
-static BYTE *pbHash = NULL;
-static BYTE *pbSignature = NULL;
-static BYTE *pbKeyBlob = NULL; 
-
-static FILE *certf=NULL;		// Файл, в котором хранится сертификат
-static FILE *publicf=NULL;		// Файл, в котором хранится открытый ключ
-
-static BYTE *pbKeyBlobSimple = NULL;   // Указатель на сессионный ключевой BLOB 
-static BYTE *pbIV = NULL;		// Вектор инициализации сессионного ключа
-
-void HandleError(const char *s);
-void CleanUp(void);
-void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, const char *szKeyFile);
-
-void SignHash(
+CallResult SignHash(
     const char* keyContainer, 
     BYTE* messageBytesArray, 
     DWORD messageBytesArrayLength, 
     BYTE* signatureBytesArray, 
     DWORD* signatureBytesArrayLength
 ) {
-    DWORD dwSigLen;
-    DWORD dwBlobLen;
-    DWORD cbHash;
+    HCRYPTPROV hProv = 0; // Дескриптор CSP
+    HCRYPTHASH hHash = 0;
 
-    // Получение дескриптора контекста криптографического провайдера.
-    if(CryptAcquireContext(
-        &hProv, 
-        keyContainer, 
-        NULL, 
-        PROV_GOST_2012_256, //PROV_GOST_2001_DH, 
-        0)
-    ) {
-        printf("CSP context acquired.\n");
-    }
-    else {
-        HandleError("Error during CryptAcquireContext.");
-    }
+    BYTE *pbSignature = NULL;
+    DWORD signatureLength = 0;
 
-    //--------------------------------------------------------------------
-    // Создание объекта функции хеширования.
-    if(CryptCreateHash(
-        hProv, 
-        CALG_GR3411_2012_256, //CALG_GR3411,
-        0, 
-        0, 
-        &hHash)
-    ) {
-        printf("Hash object created. \n");
-    } else {
-        HandleError("Error during CryptCreateHash.");
-    }
+    // Получение дескриптора контекста криптографического провайдера
+    if(!CryptAcquireContext( &hProv, keyContainer, NULL, PROV_GOST_2012_256, /*PROV_GOST_2001_DH,*/ 0))
+        return HandleError("Error during CryptAcquireContext");
 
-    //--------------------------------------------------------------------
-    // Передача параметра HP_OID объекта функции хеширования.
-    //--------------------------------------------------------------------
+    // Создание объекта функции хеширования
+    if(!CryptCreateHash(hProv, CALG_GR3411_2012_256, /*CALG_GR3411,*/0, 0, &hHash))
+        return HandleError("Error during CryptCreateHash");
 
-    //--------------------------------------------------------------------
-    // Определение размера BLOBа и распределение памяти.
+    // Вычисление криптографического хеша буфера
+    if(!CryptHashData(hHash, messageBytesArray, messageBytesArrayLength, 0))
+        return HandleError("Error during CryptHashData");
 
-    if(CryptGetHashParam(hHash,
-        HP_OID,
-        NULL,
-        &cbHash,
-        0)
-    ) {
-        printf("Size of the BLOB determined. \n");
-    } else {
-        HandleError("Error computing BLOB length.");
-    }
+    // Определение размера подписи и распределение памяти
+    if(!CryptSignHash(hHash, AT_KEYEXCHANGE, NULL, 0, NULL, &signatureLength))
+        return HandleError("Error during CryptSignHash");
 
-    pbHash = (BYTE*)malloc(cbHash);
-    if(!pbHash) 
-       HandleError("Out of memory. \n");
-
-    // Копирование параметра HP_OID в pbHash.
-    if(CryptGetHashParam(hHash,
-        HP_OID,
-        pbHash,
-        &cbHash,
-        0)
-    ) {
-        printf("Parameters have been written to the pbHash. \n");
-    } else {
-        HandleError("Error during CryptGetHashParam.");
-    }
-
-    //--------------------------------------------------------------------
-    // Вычисление криптографического хеша буфера.
-    if(CryptHashData(
-        hHash, 
-        messageBytesArray, 
-        messageBytesArrayLength, 
-        0)
-    ) {
-        printf("The data buffer has been hashed.\n");
-    } else {
-        HandleError("Error during CryptHashData.");
-    }
-
-    // Определение размера подписи и распределение памяти.
-    dwSigLen = 0;
-    if(CryptSignHash(
-        hHash, 
-        AT_KEYEXCHANGE, 
-        NULL, 
-        0, 
-        NULL, 
-        &dwSigLen)
-    ) {
-        printf("Signature length %d found.\n", dwSigLen);
-    } else {
-        HandleError("Error during CryptSignHash.");
-    }
-
-    //--------------------------------------------------------------------
-    // Распределение памяти под буфер подписи.
-    pbSignature = (BYTE *)malloc(dwSigLen);
+    // Распределение памяти под буфер подписи
+    pbSignature = (BYTE *)malloc(signatureLength);
     if(!pbSignature)
-        HandleError("Out of memory.");
+        return HandleError("Out of memory");
 
-    // Подпись объекта функции хеширования.
-    if(CryptSignHash(
-        hHash, 
-        AT_KEYEXCHANGE, 
-        NULL, 
-        0, 
-        pbSignature, 
-        &dwSigLen)
-    ) {
-        printf("pbSignature is the hash signature.\n");
-    } else {
-        HandleError("Error during CryptSignHash.");
-    }
+    // Подпись объекта функции хеширования
+    if(!CryptSignHash(hHash, AT_KEYEXCHANGE, NULL, 0, pbSignature, &signatureLength))
+        return HandleError("Error during CryptSignHash");
     
-    memcpy(signatureBytesArray, pbSignature, dwSigLen);
-    memcpy(signatureBytesArrayLength, &dwSigLen, sizeof(dwSigLen));
+    memcpy(signatureBytesArray, pbSignature, signatureLength);
+    memcpy(signatureBytesArrayLength, &signatureLength, sizeof(signatureLength));
 
-
-    // Уничтожение объекта функции хеширования.
+    free(pbSignature);
+    // Уничтожение объекта функции хеширования
     if(hHash) 
         CryptDestroyHash(hHash);
+    if(hProv) 
+        CryptReleaseContext(hProv, 0);
 
-    printf("The hash object has been destroyed.\n");
-    printf("The signing is completed.\n\n");
+    return ResultSuccess();
 }
 
-BOOL VerifySignature(
+CallResult VerifySignature(
     BYTE* messageBytesArray, DWORD messageBytesArrayLength, 
     BYTE* signatureByteArray, DWORD signatureBytesArrayLength,
-    const char* certFilename
+    const char* certFilename,
+    BOOL *verificationResultToReturn
 ) {
+    HCRYPTPROV hProv = 0; // Дескриптор CSP
+    HCRYPTHASH hHash = 0;
+    HCRYPTKEY hPubKey = 0;
+
     BOOL verificationResult = FALSE;
     BYTE  *pbKeyBlob = (BYTE *)malloc(MAX_PUBLICKEYBLOB_SIZE);
     DWORD pbKeyBlobLength = MAX_PUBLICKEYBLOB_SIZE;
 
+    if(!CryptAcquireContext(&hProv, NULL, NULL, PROV_GOST_2012_256, /*PROV_GOST_2001_DH,*/CRYPT_VERIFYCONTEXT))
+        return HandleError("CryptAcquireContext failed");
 
-    // Содержимое буфера pbBuffer представляет из себя некоторые 
-    // подписанные ранее данные.
-    BYTE *pbBuffer= (BYTE *)malloc(messageBytesArrayLength);
-    memcpy(pbBuffer, messageBytesArray, messageBytesArrayLength);
+    CallResult pbLoadResult = LoadPublicKey(hProv, pbKeyBlob, &pbKeyBlobLength, certFilename, certFilename);
+    if(pbLoadResult.status)
+        return pbLoadResult;
 
-    DWORD dwBufferLen = messageBytesArrayLength;
+    // Получение откытого ключа отправителя и импортирование его в CSP. Дескриптор открытого ключа возвращается в hPubKey
+    if(!CryptImportKey(hProv, pbKeyBlob, pbKeyBlobLength, 0, 0, &hPubKey))
+        return HandleError("Public key import failed");
 
-    LoadPublicKey(pbKeyBlob, &pbKeyBlobLength, certFilename, certFilename);
+    // Создание объекта функции хеширования
+    if(!CryptCreateHash(hProv, CALG_GR3411_2012_256, /*CALG_GR3411, */0, 0, &hHash))
+        return HandleError("Error during CryptCreateHash");
 
-    //--------------------------------------------------------------------
-    // Получение откытого ключа пользователя, который создал цифровую подпись, 
-    // и импортирование его в CSP с помощью функции CryptImportKey. Она 
-    // возвращает дескриптор открытого ключа в hPubKey.
-    if(CryptImportKey(
-        hProv,
-        pbKeyBlob,
-        pbKeyBlobLength,
-        0,
-        0,
-        &hPubKey)
-    ) {
-        printf("The key has been imported.\n");
-    } else {
-        HandleError("Public key import failed.");
-    }
+    // Вычисление криптографического хеша буфера
+    if(!CryptHashData(hHash, messageBytesArray, messageBytesArrayLength, 0))
+        return HandleError("Error during CryptHashData");
 
-    //--------------------------------------------------------------------
-    // Создание нового объекта функции хеширования.
-    if(CryptCreateHash(
-        hProv, 
-        CALG_GR3411_2012_256, //CALG_GR3411, //
-        0, 
-        0, 
-        &hHash)
-    ) {
-        printf("The hash object has been recreated. \n");
-    } else {
-        HandleError("Error during CryptCreateHash.");
-    }
-
-    //--------------------------------------------------------------------
-    // Вычисление криптографического хеша буфера.
-    if(CryptHashData(
-        hHash, 
-        pbBuffer, 
-        dwBufferLen, 
-        0)
-    ) {
-        printf("The new has been created.\n");
-    } else {
-        HandleError("Error during CryptHashData.");
-    }
-
-    //--------------------------------------------------------------------
-    // Проверка цифровой подписи.
-    if(CryptVerifySignature(
-        hHash, 
-        signatureByteArray, 
-        signatureBytesArrayLength, 
-        hPubKey,
-        NULL, 
-        0)
-    ) {
-        printf("The signature has been verified.\n");
+    // Проверка цифровой подписи
+    if(CryptVerifySignature(hHash, signatureByteArray, signatureBytesArrayLength, hPubKey, NULL, 0))
         verificationResult = TRUE;
-    } else {
-        printf("Signature not validated!\n");
+    else
         verificationResult = FALSE;
-    }
 
-    CleanUp();
-    return verificationResult;
+    memcpy(verificationResultToReturn, &verificationResult, sizeof(verificationResult));
+
+    free(pbKeyBlob);
+    if(hHash) 
+        CryptDestroyHash(hHash);
+    if(hProv) 
+        CryptReleaseContext(hProv, 0);
+
+    return ResultSuccess();
 }
 
-void Encrypt(
+CallResult Encrypt(
     DWORD* sessionKeyBlobLength, BYTE* sessionKeyBlob, 
     const char* senderContainerName, 
     const char* responderCertFilename, 
     BYTE* textToEncrypt, 
     int textToEncryptLength, 
-    BYTE* sessionEncryptedKey, 
-    BYTE* sessionSV, 
     BYTE* IV, 
-    DWORD* IVLength, 
-    BYTE* sessionMacKey, 
-    BYTE* encryptionParam, 
-    DWORD* encryptionParamLength
+    DWORD* IVLength
 ) {
-    BYTE  pbResponderKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
-    DWORD dwResponderKeyBlobLen = MAX_PUBLICKEYBLOB_SIZE;
+    HCRYPTPROV hProv = 0; // Дескриптор CSP
+    HCRYPTKEY hKey = 0;     // Дескриптор закрытого ключа
+    HCRYPTKEY hSessionKey = 0;  // Дескриптор сессионного ключа
+    HCRYPTKEY hAgreeKey = 0;        // Дескриптор ключа согласования
+
+    BYTE *pbKeyBlobSimple = NULL;   // Указатель на сессионный ключевой BLOB
     DWORD dwBlobLenSimple;
 
+    BYTE *pbIV = NULL;      // Вектор инициализации сессионного ключа
     DWORD dwIV = 0;
+
+    BYTE  pbResponderKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
+    DWORD dwResponderKeyBlobLen = MAX_PUBLICKEYBLOB_SIZE;
+
     DWORD bufLen = 0;
     ALG_ID ke_alg = CALG_PRO_EXPORT;
-    DWORD cbEncryptionParamSetStandart;
 
-    // Получение дескриптора контейнера получателя с именем senderContainerName, 
-    // находящегося в рамках провайдера. 
-    if(CryptAcquireContext(&hProv, senderContainerName, NULL, PROV_GOST_2012_256/*PROV_GOST_2001_DH*/, 0)) {
-	   printf("The key container \"%s\" has been acquired. \n", senderContainerName);
-    } else {
-	   HandleError("Error during CryptAcquireContext.");
-    }
+    // Получение дескриптора контейнера получателя с именем senderContainerName, находящегося в рамках провайдера
+    if(!CryptAcquireContext(&hProv, senderContainerName, NULL, PROV_GOST_2012_256/*PROV_GOST_2001_DH*/, 0))
+	   return HandleError("Error during CryptAcquireContext");
 
-    LoadPublicKey(pbResponderKeyBlob, &dwResponderKeyBlobLen, responderCertFilename, responderCertFilename);
+    CallResult pkLoadResult = LoadPublicKey(hProv, pbResponderKeyBlob, &dwResponderKeyBlobLen, responderCertFilename, responderCertFilename);
+    if(pkLoadResult.status)
+        return pkLoadResult;
 
-    // Получение дескриптора закрытого ключа отправителя.
-    if(CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey)) {
-        printf("The private key has been acquired. \n");
-    } else {
-	   HandleError("Error during CryptGetUserKey private key.");
-    }
+    // Получение дескриптора закрытого ключа отправителя
+    if(!CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey))
+        return HandleError("Error during CryptGetUserKey private key");
 
-    // Получение ключа согласования импортом открытого ключа получателя
-    // на закрытом ключе отправителя.
-    if(CryptImportKey(hProv, pbResponderKeyBlob, dwResponderKeyBlobLen, hKey, 0, &hAgreeKey)) {
-	   printf("The responder public key has been imported. \n");
-    } else {
-	   HandleError("Error during CryptImportKey public key.");
-    }
+    // Получение ключа согласования импортом открытого ключа получателя на закрытом ключе отправителя
+    if(!CryptImportKey(hProv, pbResponderKeyBlob, dwResponderKeyBlobLen, hKey, 0, &hAgreeKey))
+	   return HandleError("Error during CryptImportKey public key");
 
     // Установление PRO12_EXPORT алгоритма ключа согласования
-    if(CryptSetKeyParam(hAgreeKey, KP_ALGID, (LPBYTE)&ke_alg, 0)) {
-	   printf("PRO12_EXPORT agree key algorithm has been set. \n");
-    } else {
-	   HandleError("Error during CryptSetKeyParam agree key.");
-    }
+    if(!CryptSetKeyParam(hAgreeKey, KP_ALGID, (LPBYTE)&ke_alg, 0))
+	   return HandleError("Error during CryptSetKeyParam agree key");
 
-    // Генерация сессионного ключа.
-    if(CryptGenKey(hProv, CALG_G28147, CRYPT_EXPORTABLE, &hSessionKey)) {
-	   printf("Original session key is created. \n");
-    } else {
-	   HandleError("ERROR -- CryptGenKey.");
-    }
+    // Генерация сессионного ключа
+    if(!CryptGenKey(hProv, CALG_G28147, CRYPT_EXPORTABLE, &hSessionKey))
+	   return HandleError("Error during CryptGenKey");
 
      //--------------------------------------------------------------------
-    // Зашифрование сессионного ключа.
+    // Зашифрование сессионного ключа
     //--------------------------------------------------------------------
 
-    //--------------------------------------------------------------------
-    // Определение размера BLOBа сессионного ключа и распределение памяти.
-    if(CryptExportKey( hSessionKey, hAgreeKey, SIMPLEBLOB, 0, NULL, &dwBlobLenSimple)) {
-	   printf("Size of the BLOB for the sender session key determined. \n");
-    } else {
-	   HandleError("Error computing BLOB length.");
-    }
+    // Определение размера BLOBа сессионного ключа и распределение памяти
+    if(!CryptExportKey( hSessionKey, hAgreeKey, SIMPLEBLOB, 0, NULL, &dwBlobLenSimple))
+	   return HandleError("Error computing BLOB length");
 
     pbKeyBlobSimple = (BYTE*)malloc(dwBlobLenSimple);
 
     if(!pbKeyBlobSimple) 
-	   HandleError("Out of memory. \n");
+	   return HandleError("Out of memory");
 
-    // Зашифрование сессионного ключа на ключе Agree, экспорт в pbKeyBlobSimple.
-    if(CryptExportKey(hSessionKey, hAgreeKey, SIMPLEBLOB, 0, pbKeyBlobSimple, &dwBlobLenSimple)) {
-    	printf("Contents have been written to the BLOB. \n");
-    } else {
-	   HandleError("Error during CryptExportKey.");
-    }
+    // Зашифрование сессионного ключа на ключе Agree, экспорт в pbKeyBlobSimple
+    if(!CryptExportKey(hSessionKey, hAgreeKey, SIMPLEBLOB, 0, pbKeyBlobSimple, &dwBlobLenSimple))
+    	return HandleError("Error during CryptExportKey");
 
-    // Определение размера вектора инициализации сессионного ключа. 
-    if(CryptGetKeyParam(hSessionKey, KP_IV, NULL, &dwIV, 0)) {
-	   printf("Size of the IV for the session key determined. \n");
-    } else {
-	   HandleError("Error computing IV length.");
-    }
+    // Определение размера вектора инициализации сессионного ключа
+    if(!CryptGetKeyParam(hSessionKey, KP_IV, NULL, &dwIV, 0))
+	   return HandleError("Error computing IV length");
 
     pbIV = (BYTE*)malloc(dwIV);
     if (!pbIV)
-	   HandleError("Out of memory. \n");
+	   return HandleError("Out of memory");
     
-    // Определение вектора инициализации сессионного ключа.
-    if(CryptGetKeyParam(hSessionKey, KP_IV, pbIV, &dwIV, 0)) {
-	   printf( "CryptGetKeyParam succeeded. \n");
-    } else {
-	   HandleError("Error during CryptGetKeyParam.");
-    }
+    // Определение вектора инициализации сессионного ключа
+    if(!CryptGetKeyParam(hSessionKey, KP_IV, pbIV, &dwIV, 0))
+	   return HandleError("Error during CryptGetKeyParam");
 
     memcpy(IV, pbIV, dwIV);
     memcpy(IVLength, &dwIV, sizeof(dwIV));
-    memcpy(sessionSV, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bSV, SEANCE_VECTOR_LEN);
-    memcpy(sessionEncryptedKey, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptedKey, G28147_KEYLEN);
-    memcpy(sessionMacKey, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bMacKey, EXPORT_IMIT_SIZE);
 
-    if (((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[0] != 0x30)
-    	HandleError("The EncryptionParam can not be written to the 'EncryptionParam.bin' - first byte is not 0x30\n");
-    //CryptDecodeObject(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, X509_NAME, );
-    cbEncryptionParamSetStandart = (DWORD)((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[1] + sizeof((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[0] + sizeof((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet[1];
-
-    memcpy(encryptionParam, ((CRYPT_SIMPLEBLOB*)pbKeyBlobSimple)->bEncryptionParamSet, cbEncryptionParamSetStandart);
-    memcpy(encryptionParamLength, &cbEncryptionParamSetStandart, sizeof(cbEncryptionParamSetStandart));
-
-    memcpy(sessionKeyBlob, pbKeyBlobSimple, dwBlobLenSimple); //sizeof(pbKeyBlobSimple)
+    memcpy(sessionKeyBlob, pbKeyBlobSimple, dwBlobLenSimple);
     memcpy(sessionKeyBlobLength, &dwBlobLenSimple, sizeof(dwBlobLenSimple));
 
     BOOL bFinal = TRUE;
     bufLen = textToEncryptLength;
 
-    if(CryptEncrypt(hSessionKey, 0, bFinal, 0, textToEncrypt, &textToEncryptLength, bufLen)) {
-        printf( "Encryption succeeded. \n");
-    } else {
-        HandleError("Encryption failed.");
-    }
+    if(!CryptEncrypt(hSessionKey, 0, bFinal, 0, textToEncrypt, &textToEncryptLength, bufLen))
+        return HandleError("Encryption failed");
 
-    CleanUp();
+    free(pbIV);
+    free(pbKeyBlobSimple);
+    if(hAgreeKey)
+       CryptDestroyKey(hAgreeKey);
+    if(hSessionKey)
+       CryptDestroyKey(hSessionKey);
+    if(hProv) 
+        CryptReleaseContext(hProv, 0);
+
+    return ResultSuccess();
 }
 
-void Decrypt(
+CallResult Decrypt(
     const char* responderContainerName, 
     const char* senderCertFilename, 
     BYTE* encryptedText, int encryptedTextLength, 
     BYTE* IV, int IVLength, 
     BYTE* keySimpleBlob, int keySimpleBlobLength
 ) {
+    HCRYPTPROV hProv = 0; // Дескриптор CSP
+    HCRYPTKEY hKey = 0;     // Дескриптор закрытого ключа
+    HCRYPTKEY hSessionKey = 0;  // Дескриптор сессионного ключа
+    HCRYPTKEY hAgreeKey = 0;        // Дескриптор ключа согласования
+
     BYTE  pbKeyBlob[MAX_PUBLICKEYBLOB_SIZE];
     DWORD dwBlobLen = MAX_PUBLICKEYBLOB_SIZE;
 
@@ -400,99 +236,72 @@ void Decrypt(
     
     ALG_ID ke_alg = CALG_PRO_EXPORT;
 
-   // Получение дескриптора контейнера получателя с именем "responderContainerName", 
-    // находящегося в рамках провайдера. 
+   // Получение дескриптора контейнера получателя с именем "responderContainerName", находящегося в рамках провайдера
     if(!CryptAcquireContext(&hProv, responderContainerName, NULL, PROV_GOST_2012_256/*PROV_GOST_2001_DH*/, 0)) {
-	   HandleError("Error during CryptAcquireContext");
-    }
-    printf("The key container \"%s\" has been acquired. \n", responderContainerName);
-
-    LoadPublicKey(pbKeyBlob, &dwBlobLen, senderCertFilename, senderCertFilename);
-
-    if(CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey)) {
-		printf("The private key has been acquired. \n");
-    } else {
-		HandleError("Error during CryptGetUserKey private key.");
+	   return HandleError("Error during CryptAcquireContext");
     }
 
-    if(CryptImportKey(hProv, pbKeyBlob, dwBlobLen, hKey, 0, &hAgreeKey)) {
-		printf("The sender public key has been imported. \n");
-    } else {
-		HandleError("Error during CryptImportKey public key.");
-    }
+    CallResult pkLoadResult = LoadPublicKey(hProv, pbKeyBlob, &dwBlobLen, senderCertFilename, senderCertFilename);
+    if(pkLoadResult.status)
+        return pkLoadResult;
 
-    if(CryptSetKeyParam(hAgreeKey, KP_ALGID, (LPBYTE)&ke_alg, 0)) {
-		printf("PRO12_EXPORT agree key algorithm has been set. \n");
-    } else {
-		HandleError("Error during CryptSetKeyParam agree key.");
-    }
+    if(!CryptGetUserKey(hProv, AT_KEYEXCHANGE, &hKey))
+		return HandleError("Error during CryptGetUserKey private key");
 
-    if(CryptImportKey(hProv, keySimpleBlob, keySimpleBlobLength, hAgreeKey, 0, &hSessionKey)) {
-		printf("The session key has been imported. \n");
-    } else {
-		HandleError("Error during CryptImportKey session key.");
-    }
+    if(!CryptImportKey(hProv, pbKeyBlob, dwBlobLen, hKey, 0, &hAgreeKey))
+		return HandleError("Error during CryptImportKey public key");
 
-    if(!CryptSetKeyParam(hSessionKey, KP_IV, IV, 0)) {
-		HandleError("Error during CryptSetKeyParam.");
-    }
-    printf( "CryptSetKeyParam succeeded. \n");
+    if(!CryptSetKeyParam(hAgreeKey, KP_ALGID, (LPBYTE)&ke_alg, 0))
+        return HandleError("Error during CryptSetKeyParam agree key");
 
-    cbContent = (DWORD)encryptedTextLength;
-	BYTE* pbContent = (BYTE*)malloc(encryptedTextLength); 
-    memcpy(pbContent, encryptedText, encryptedTextLength);
+    if(!CryptImportKey(hProv, keySimpleBlob, keySimpleBlobLength, hAgreeKey, 0, &hSessionKey))
+		return HandleError("Error during CryptImportKey session key");
+
+    if(!CryptSetKeyParam(hSessionKey, KP_IV, IV, 0))
+		return HandleError("Error during CryptSetKeyParam");
 
     BOOL bFinal = TRUE;
 
-    if(CryptDecrypt(hSessionKey, 0, bFinal, 0, pbContent, &cbContent)) {
-		printf( "Decryption succeeded. \n");
-    } else {
-		HandleError("Decryption failed.");
-    }
-    
-    memcpy(encryptedText, pbContent, cbContent);
-    printf("The program ran to completion without error. \n");
+    if(!CryptDecrypt(hSessionKey, 0, bFinal, 0, encryptedText, &encryptedTextLength))
+		return HandleError("Decryption failed");
 
- //  CleanUp();
-  //  free(pbEncryptionParamSetStandart);
+
+    if(hAgreeKey)
+       CryptDestroyKey(hAgreeKey);
+    if(hSessionKey)
+       CryptDestroyKey(hSessionKey);
+    if(hProv) 
+        CryptReleaseContext(hProv, 0);
+
+    return ResultSuccess();
 }
 
-void CreateHash(BYTE* bytesArrayToHash, DWORD bytesArrayToHashLength, BYTE* hash, DWORD* hashLength) {
-   	HCRYPTPROV hProv = 0;
+CallResult CreateHash(BYTE* bytesArrayToHash, DWORD bytesArrayToHashLength, BYTE* hash, DWORD* hashLength) {
+   	HCRYPTPROV hProv = 0; // Дескриптор CSP
    	HCRYPTHASH hHash = 0;
 
 	BYTE rgbHash[GR3411LEN];
     DWORD cbHash = GR3411LEN;
 
-	if(!CryptAcquireContext(
-		&hProv,
-		NULL,
-		NULL,
-		PROV_GOST_2012_256, //PROV_GOST_2001_DH,
-		CRYPT_VERIFYCONTEXT)) {
-		HandleError("CryptAcquireContext failed");
+	if(!CryptAcquireContext(&hProv, NULL, NULL, PROV_GOST_2012_256, /*PROV_GOST_2001_DH,*/CRYPT_VERIFYCONTEXT)) {
+		return HandleError("CryptAcquireContext failed");
 	}
 
 	if(!CryptCreateHash(hProv, /*CALG_GR3411*/CALG_GR3411_2012_256, 0, 0, &hHash)) {
 		CryptReleaseContext(hProv, 0);
-		HandleError("CryptCreateHash failed"); 
+		return HandleError("CryptCreateHash failed"); 
 	}
 
-	if(!CryptHashData(
-        hHash,
-        bytesArrayToHash,
-        bytesArrayToHashLength,
-        0))
-    {
+	if(!CryptHashData(hHash, bytesArrayToHash, bytesArrayToHashLength, 0)) {
 	    CryptReleaseContext(hProv, 0);
 	    CryptDestroyHash(hHash);
-	    HandleError("CryptHashData failed"); 
+	    return HandleError("CryptHashData failed"); 
 	}
 
     if(!CryptGetHashParam(hHash, HP_HASHVAL, rgbHash, &cbHash, 0)) {
 		CryptDestroyHash(hHash);
 		CryptReleaseContext(hProv, 0);
-		HandleError("CryptGetHashParam failed"); 
+		return HandleError("CryptGetHashParam failed"); 
 	}
 
     memcpy(hash, rgbHash, cbHash);
@@ -500,90 +309,72 @@ void CreateHash(BYTE* bytesArrayToHash, DWORD bytesArrayToHashLength, BYTE* hash
 
     CryptDestroyHash(hHash);
     CryptReleaseContext(hProv, 0);
+
+    return ResultSuccess();
 }
 
-void LoadPublicKey(BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, const char *szKeyFile) {
-    //if(fopen_s(&certf, szCertFile, "r+b" ))
+CallResult LoadPublicKey(HCRYPTPROV hProv, BYTE *pbBlob, DWORD *pcbBlob, const char *szCertFile, const char *szKeyFile) {
+    FILE *certf = NULL;       // Файл, в котором хранится сертификат
+    FILE *publicf = NULL;     // Файл, в котором хранится открытый ключ
+
     if((certf = fopen(szCertFile, "rb"))) {
         DWORD cbCert = 2000;
         BYTE  pbCert[2000];
         PCCERT_CONTEXT pCertContext = NULL;
         HCRYPTKEY hPubKey;
-        printf( "The file '%s' was opened\n", szCertFile );
 
         cbCert = (DWORD)fread(pbCert, 1, cbCert, certf);
         if(!cbCert)
-            HandleError( "Failed to read certificate\n" );
-        printf( "Certificate was read from the '%s'\n", szCertFile );
+            return HandleError( "Failed to read certificate" );
 
-        pCertContext = CertCreateCertificateContext (
-            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, pbCert, cbCert);
-        if (!pCertContext) {
-            HandleError( "CertCreateCertificateContext" );
-        }
+        pCertContext = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, pbCert, cbCert);
+
+        if (!pCertContext)
+            return HandleError( "CertCreateCertificateContext" );
 
         // Импортируем открытый ключ
-        if (CryptImportPublicKeyInfoEx(hProv, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, &(pCertContext->pCertInfo->SubjectPublicKeyInfo), 0, 0, NULL, &hPubKey)) {
-            printf("Public key imported from cert file\n");
-        } else {
+        if (!CryptImportPublicKeyInfoEx(hProv, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, &(pCertContext->pCertInfo->SubjectPublicKeyInfo), 0, 0, NULL, &hPubKey)) {
             CertFreeCertificateContext(pCertContext);
-            HandleError( "CryptImportPublicKeyInfoEx" );
+            return HandleError( "CryptImportPublicKeyInfoEx" );
         }
-        CertFreeCertificateContext(pCertContext);
         
         // Экспортируем его в BLOB
-        if (CryptExportKey(hPubKey, 0, PUBLICKEYBLOB, 0, pbBlob, pcbBlob)) {
-            printf("Public key exported to blob\n");
-        } else {
-            HandleError( "CryptExportKey" );
+        if (!CryptExportKey(hPubKey, 0, PUBLICKEYBLOB, 0, pbBlob, pcbBlob)) {
+            CryptDestroyKey(hPubKey);
+            return HandleError( "CryptExportKey" );
         }
+
+        CertFreeCertificateContext(pCertContext);
+        CryptDestroyKey(hPubKey);
+        fclose(certf);
     } else {
-        // Открытие файла, в котором содержится открытый ключ получателя.
-        //if(!fopen_s(&publicf, szKeyFile, "r+b" ))
         if(!(publicf = fopen(szKeyFile, "rb")))
-            HandleError( "Problem opening the public key blob file\n" );
-        printf( "The file '%s' was opened\n", szKeyFile );
+            return HandleError( "Problem opening the public key blob file" );
 
         *pcbBlob = (DWORD)fread(pbBlob, 1, *pcbBlob, publicf);
         if(!*pcbBlob)
-            HandleError( "Failed to read key blob file\n" );
-        printf( "Key blob was read from the '%s'\n", szKeyFile );
-    }
-}
+            return HandleError( "Failed to read key blob file" );
 
-void CleanUp(void) {
-    if(certf)
-       fclose (certf);
-
-    if(publicf)
         fclose (publicf);
+    }
 
-    if(hKey)
-       CryptDestroyKey(hKey);
-
-    if(hSessionKey)
-       CryptDestroyKey(hSessionKey);
-
-    if(hAgreeKey)
-       CryptDestroyKey(hAgreeKey);
-
-    if(hProv) 
-        CryptReleaseContext(hProv, 0);
-
-    if(pbKeyBlobSimple)
-       free(pbKeyBlobSimple);
-
-    if(pbIV)
-       free(pbIV);
+    return ResultSuccess();
 }
 
-void HandleError(const char *s) {
-    DWORD err = GetLastError();
-    printf("Error number     : 0x%x\n", err);
-    printf("Error description: %s\n", s);
-    CleanUp();
-    if(!err) 
-        err = 1;
-    exit(err);
+CallResult HandleError(const char *errorMessage) {
+    DWORD errorCode = GetLastError();
+    if(!errorCode) 
+        errorCode = 1;
+
+    CallResult result = {
+        errorCode, 
+        errorCode, 
+        errorMessage
+    };
+
+    printf("Error number     : 0x%x\n", result.errorCode);
+    printf("Error description: %s\n", result.errorMessage);
+
+    return result;
 }
 
